@@ -2,6 +2,7 @@ package maxminddb
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/big"
 	"reflect"
@@ -52,6 +53,89 @@ func (d *decoder) decode(offset uint, result reflect.Value, depth int) (uint, er
 		return d.nextValueOffset(offset, 1)
 	}
 	return d.decodeFromType(typeNum, size, newOffset, result, depth+1)
+}
+
+func (d *decoder) decodeField(offset uint, language string, path []string, result reflect.Value, depth int) (uint, error) {
+	if depth > maximumDataStructureDepth {
+		return 0, newInvalidDatabaseError("exceeded maximum data structure depth; database is likely corrupt")
+	}
+
+	if path == nil || len(path) == 0 {
+		typeNum, size, newOffset, err := d.decodeCtrlData(offset)
+		if err != nil {
+			return 0, err
+		}
+
+		if typeNum != _Pointer && result.Kind() == reflect.Uintptr {
+			result.Set(reflect.ValueOf(uintptr(offset)))
+			return d.nextValueOffset(offset, 1)
+		}
+		return d.decodeFromType(typeNum, size, newOffset, result, depth+1)
+	} else {
+		typeNum, size, newOffset, err := d.decodeCtrlData(offset)
+		if err != nil {
+			return 0, err
+		}
+
+		offset = newOffset
+
+		var key []byte
+		for i := uint(0); i < size; i++ {
+			if key, offset, err = d.decodeKey(offset); err != nil {
+				return 0, err
+			}
+			if string(key) != path[0] {	// "country"
+				offset, err = d.nextValueOffset(offset, 1)
+				continue
+			}
+
+			if len(path) == 1 {
+				if typeNum, size, newOffset, err = d.decodeCtrlData(offset); err != nil {
+					return 0, err
+				}
+
+				if typeNum != _Pointer && result.Kind() == reflect.Uintptr {
+					result.Set(reflect.ValueOf(uintptr(offset)))
+					return d.nextValueOffset(offset, 1)
+				}
+				return d.decodeFromType(typeNum, size, newOffset, result, depth+1)
+			} else {
+				typeNum, size, offset, err = d.decodeCtrlData(offset)
+				if err != nil {
+					return 0, err
+				}
+				for i := uint(0); i < size; i++ {
+					key, offset, err = d.decodeKey(offset)
+					if string(key) != path[1] { // "names"
+						offset, err = d.nextValueOffset(offset, 1)
+						continue
+					}
+
+					if len(language) == 0 {
+						offset, err = d.decode(offset, result, depth+1)
+						return offset, err
+					} else {
+						typeNum, size, offset, err = d.decodeCtrlData(offset)
+						if err != nil {
+							return 0, err
+						}
+
+						for i := uint(0); i < size; i++ {
+							key, offset, err = d.decodeKey(offset)
+							if string(key) != language {
+								continue
+							}
+
+							offset, err = d.decode(offset, result, depth+1)
+							return offset, err
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return 0, newInvalidDatabaseError(fmt.Sprintf("not found field language = %s; path = %v", language, path))
 }
 
 func (d *decoder) decodeCtrlData(offset uint) (dataType, uint, uint, error) {

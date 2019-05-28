@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"reflect"
 )
@@ -117,6 +118,17 @@ func (r *Reader) Lookup(ipAddress net.IP, result interface{}) error {
 	return r.retrieveData(pointer, result)
 }
 
+func (r *Reader) GetField(ipAddress net.IP, language string, path []string, result interface{}) error {
+	if r.buffer == nil {
+		return errors.New("cannot call Lookup on a closed database")
+	}
+	pointer, err := r.lookupPointer(ipAddress)
+	if pointer == 0 || err != nil {
+		return err
+	}
+	return r.retrieveField(pointer, language, path, result)
+}
+
 // LookupOffset maps an argument net.IP to a corresponding record offset in the
 // database. NotFound is returned if no such record is found, and a record may
 // otherwise be extracted by passing the returned offset to Decode. LookupOffset
@@ -162,7 +174,16 @@ func (r *Reader) decode(offset uintptr, result interface{}) error {
 		return errors.New("result param must be a pointer")
 	}
 
-	_, err := r.decoder.decode(uint(offset), rv, 0)
+	_, err := r.decoder.decode(uint(offset), reflect.ValueOf(result), 0)
+	return err
+}
+
+func (r *Reader) decodeField(offset uintptr, language string, path []string, result interface{}) error {
+	rv := reflect.ValueOf(result)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return errors.New("result param must be a pointer")
+	}
+	_, err := r.decoder.decodeField(uint(offset), language, path, reflect.ValueOf(result), 0)
 	return err
 }
 
@@ -249,6 +270,14 @@ func (r *Reader) retrieveData(pointer uint, result interface{}) error {
 	return r.decode(offset, result)
 }
 
+func (r *Reader) retrieveField(pointer uint, language string, path []string, result interface{}) error {
+	offset, err := r.resolveDataPointer(pointer)
+	if err != nil {
+		return err
+	}
+	return r.decodeField(offset, language, path, result)
+}
+
 func (r *Reader) resolveDataPointer(pointer uint) (uintptr, error) {
 	var resolved = uintptr(pointer - r.Metadata.NodeCount - dataSectionSeparatorSize)
 
@@ -256,4 +285,33 @@ func (r *Reader) resolveDataPointer(pointer uint) (uintptr, error) {
 		return 0, newInvalidDatabaseError("the MaxMind DB file's search tree is corrupt")
 	}
 	return resolved, nil
+}
+
+// Open takes a string path to a MaxMind DB file and returns a Reader
+// structure or an error. The database file is opened using a memory map,
+// except on Google App Engine where mmap is not supported; there the database
+// is loaded into memory. Use the Close method on the Reader object to return
+// the resources to the system.
+func Open(file string) (*Reader, error) {
+	mmap, err := ioutil.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	reader, err := FromBytes(mmap)
+	if err != nil {
+		return nil, err
+	}
+
+	//runtime.SetFinalizer(reader, (*Reader).Close)
+	return reader, err
+}
+
+//// Close unmaps the database file from virtual memory and returns the
+//// resources to the system. If called on a Reader opened using FromBytes
+//// or Open on Google App Engine, this method does nothing.
+func (r *Reader) Close() error {
+	var err error
+	r.buffer = nil
+	return err
 }
