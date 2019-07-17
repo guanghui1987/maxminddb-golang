@@ -293,25 +293,19 @@ func (r *Reader) resolveDataPointer(pointer uint) (uintptr, error) {
 // is loaded into memory. Use the Close method on the Reader object to return
 // the resources to the system.
 func Open(file string) (*Reader, error) {
-	mmap, err := ioutil.ReadFile(file)
+	bytes, err := ioutil.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
 
-	reader, err := FromBytes(mmap)
-	if err != nil {
-		return nil, err
-	}
-
-	//runtime.SetFinalizer(reader, (*Reader).Close)
-	return reader, err
+	return FromBytes(bytes)
 }
 
-//// Close unmaps the database file from virtual memory and returns the
-//// resources to the system. If called on a Reader opened using FromBytes
-//// or Open on Google App Engine, this method does nothing.
+// Close unmaps the database file from virtual memory and returns the
+// resources to the system. If called on a Reader opened using FromBytes
+// or Open on Google App Engine, this method sets the underlying buffer
+// to nil, returning the resources to the system.
 func (r *Reader) Close() error {
-	var err error
 	r.buffer = nil
-	return err
+	return nil
 }
